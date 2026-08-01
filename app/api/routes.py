@@ -7,7 +7,7 @@ from app.core.config import settings
 from app.rag.embeddings import get_embedding
 from app.rag.pipeline import process_document
 from app.rag.reranking import rerank
-from app.rag.retrieval import search
+from app.rag.retrieval import hybrid_search, search
 from app.schemas.chat import ChatRequest, ChatResponse
 from app.services.chat_history import append_message, get_history
 from app.services.job_store import create_job, get_job
@@ -71,14 +71,26 @@ def chat(request: ChatRequest):
 
     query_embedding = get_embedding(search_question)
 
-    if settings.RERANK_ENABLED:
-        # Over-fetch candidates from the vector store, then let the LLM
-        # re-score them for actual relevance before keeping the top k.
-        fetch_k = min(request.k * settings.RERANK_FETCH_MULTIPLIER, settings.RERANK_MAX_FETCH)
+    fetch_k = (
+        min(request.k * settings.RERANK_FETCH_MULTIPLIER, settings.RERANK_MAX_FETCH)
+        if settings.RERANK_ENABLED
+        else request.k
+    )
+
+    if settings.HYBRID_SEARCH_ENABLED:
+        # Fuses vector + keyword (BM25) search results via Reciprocal
+        # Rank Fusion, so exact-term matches aren't missed just because
+        # they don't cluster nearby in embedding space.
+        candidates = hybrid_search(search_question, query_embedding, k=fetch_k)
+    else:
         candidates = [doc for doc, _distance in search(query_embedding, k=fetch_k)]
+
+    if settings.RERANK_ENABLED:
+        # Over-fetched above; let the LLM re-score for actual relevance
+        # to the question before keeping the top k.
         context_chunks = rerank(search_question, candidates, top_k=request.k)
     else:
-        context_chunks = [doc for doc, _distance in search(query_embedding, k=request.k)]
+        context_chunks = candidates[: request.k]
 
     # The LLM answers the question as the user actually phrased it — only
     # retrieval used the condensed version.

@@ -8,7 +8,7 @@ client = TestClient(app)
 def _mock_chat_pipeline(mocker, answer="Paris.", sources=None, condensed=None):
     sources = sources or ["Paris is the capital of France."]
     mocker.patch("app.api.routes.get_embedding", return_value=[0.1, 0.2, 0.3])
-    mocker.patch("app.api.routes.search", return_value=[(s, 0.05) for s in sources])
+    mocker.patch("app.api.routes.hybrid_search", return_value=sources)
     mocker.patch("app.api.routes.rerank", return_value=sources)
     mocker.patch("app.api.routes.ask_llm", return_value=answer)
     mocker.patch(

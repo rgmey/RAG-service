@@ -6,6 +6,7 @@ from app.rag.chunking import chunk_text
 from app.rag.embeddings import get_embeddings
 from app.rag.index import store_chunks
 from app.rag.ingestion import extract_text
+from app.rag.keyword_index import index_chunks
 from app.services.job_store import update_job
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,7 @@ def process_document(file_path: str, job_id: str) -> None:
         ]
 
         store_chunks(vectors)
+        index_chunks(vectors)  # keyword (BM25) index for hybrid search
 
         update_job(job_id, status="done", chunk_count=len(vectors))
 

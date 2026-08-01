@@ -42,6 +42,15 @@ class Settings:
     RERANK_FETCH_MULTIPLIER = int(os.getenv("RERANK_FETCH_MULTIPLIER", "4"))
     RERANK_MAX_FETCH = int(os.getenv("RERANK_MAX_FETCH", "20"))
 
+    # --- Hybrid search ---
+    # Combines vector search with SQLite FTS5 keyword (BM25) search via
+    # Reciprocal Rank Fusion, so exact-term matches (names, codes, numbers)
+    # aren't missed just because they don't cluster nearby in embedding
+    # space. Falls back to vector-only automatically if FTS5 isn't
+    # available or returns nothing.
+    HYBRID_SEARCH_ENABLED = os.getenv("HYBRID_SEARCH_ENABLED", "true").lower() == "true"
+    RRF_K = int(os.getenv("RRF_K", "60"))
+
     # --- Chat history ---
     # Number of prior (user, assistant) turns kept per session and fed
     # back to the model as conversation context.

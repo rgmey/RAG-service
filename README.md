@@ -23,6 +23,14 @@ FastAPI surface.
   store, then has the LLM re-score them for actual relevance before
   keeping the top k, catching cases where a chunk is semantically close
   to the query but doesn't really answer it
+- **Hybrid search** — fuses vector search with SQLite FTS5 keyword
+  (BM25) search via Reciprocal Rank Fusion, so exact-term matches
+  (names, codes, error numbers) aren't missed just because they don't
+  cluster nearby in embedding space
+- **Retrieval eval harness** (`eval/`) — measures Hit@k and MRR for
+  vector-only, keyword-only, hybrid, and hybrid+rerank on a small
+  synthetic question set, so retrieval changes are backed by a number,
+  not a guess
 - **Multi-turn chat history** — conversations persist per `session_id`,
   and follow-up questions ("what about last year?") are rewritten into
   standalone queries before retrieval, so vector search isn't thrown off
@@ -69,13 +77,19 @@ store in Chroma ◄── embed  ◄── extract text ◄── queue backgrou
                     vector search (Chroma) ──► over-fetch candidates
                                             │
                                             ▼
+                            keyword search (SQLite FTS5/BM25)
+                                            │
+                                            ▼
+                              fuse via Reciprocal Rank Fusion
+                                            │
+                                            ▼
                           LLM re-ranks candidates ──► top-k chunks
                                             │
                                             ▼
                     LLM answers original question using chunks + history
                                             │
                                             ▼
-          save turn to history ──► { answer, sources, session_id }
+              save turn to history ──► { answer, sources, session_id }  
 ```
 
 **Design choices worth calling out:**
@@ -89,6 +103,11 @@ store in Chroma ◄── embed  ◄── extract text ◄── queue backgrou
   call fails or returns something unusable, the pipeline falls back to
   plain vector-search order / the original question rather than erroring
   out the whole request.
+- Hybrid search combines rankings via Reciprocal Rank Fusion (rank
+  position, not raw score) specifically because vector distances and
+  BM25 scores aren't on comparable scales — RRF sidesteps that entirely.
+  It also degrades gracefully to vector-only if the keyword index has
+  nothing to contribute.
 - Chunking is token-based via `tiktoken` when available, with a
   character-based fallback if the tokenizer can't be loaded (e.g. offline
   environments).
@@ -261,6 +280,27 @@ is required to run the suite.
 ruff check app tests
 ```
 
+## Evaluation
+
+`eval/run_eval.py` measures retrieval quality — Hit@k and Mean Reciprocal
+Rank (MRR) — across four strategies (vector-only, keyword-only, hybrid,
+hybrid+rerank) on a small synthetic question set deliberately mixing
+exact-term questions (product codes, error codes) with paraphrased
+questions that never reuse the source text's wording. That split is what
+makes the comparison meaningful: vector search tends to miss the former,
+keyword search tends to miss the latter.
+
+```bash
+export OPENROUTER_API_KEY=sk-or-v1-...
+python -m eval.run_eval --k 3
+```
+
+It builds a throwaway index in a temp directory (never touches your real
+`data/`), makes real embedding calls (and, for the last strategy, real
+LLM re-ranking calls) against your API key, and prints a results table.
+This is a dev tool you run manually — it's not part of the pytest suite,
+which stays fully mocked and offline.
+
 ## Configuration
 
 See `.env.example` for all available environment variables — model
@@ -276,9 +316,14 @@ chat history settings.
 - No auth on the API endpoints yet — add an API key or OAuth layer before
   exposing this publicly.
 - `/chat` is not streamed — the client waits for the full LLM response.
-- Re-ranking and question-condensing each add one extra LLM call per chat
-  turn — toggle `RERANK_ENABLED` / `CONDENSE_QUESTION_ENABLED` off if
-  latency/cost matters more than the quality gain.
+- Re-ranking, hybrid search, and question-condensing each add work per
+  chat turn (extra LLM calls for the first and third) — toggle
+  `RERANK_ENABLED` / `HYBRID_SEARCH_ENABLED` / `CONDENSE_QUESTION_ENABLED`
+  off if latency/cost matters more than the quality gain.
+- The eval harness measures retrieval quality (did the right chunk come
+  back), not end-to-end answer correctness — there's no automated check
+  that the generated answer is actually right, only that it was grounded
+  in the right source.
 - Uploaded source files are never cleaned up after processing.
 - No document-type-specific parsing yet (e.g. table extraction) — plain
   text extraction only.
