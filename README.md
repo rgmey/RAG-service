@@ -43,35 +43,39 @@ FastAPI surface.
 
 ```
 Upload (PDF)
-   │
-   ▼
-POST /upload ──► save to disk ──► create job (SQLite) ──► queue background task
-                                                                   │
-                                                                   ▼
-                                              extract text → chunk → embed → store in Chroma
-                                                                   │
-                                                                   ▼
-GET /status/{job_id} ◄─────────────────────────────────────────────  (poll for job status)
-
-Question (+ optional session_id)
-   │
-   ▼
-load chat history for session ──► condense question using history (if follow-up)
+    │
+    ▼
+POST /upload ──► save to disk ──► create job (SQLite)
                                                 │
-                                                ▼
-                                     embed condensed question
-                                                │
-                                                ▼
-                        vector search (Chroma) ──► over-fetch candidates
-                                                │
-                                                ▼
-                              LLM re-ranks candidates ──► top-k chunks
-                                                │
-                                                ▼
+                                                ▼    
+store in Chroma ◄── embed  ◄── extract text ◄── queue background task  
+    │
+    ▼
+(poll for job status) ───────────► GET /status/{job_id}
+                                            │
+                                            ▼
+                            Question (+ optional session_id)
+                                            │
+                                            ▼
+                                load chat history for session
+                                            │
+                                            ▼
+                         condense question using history (if follow-up)
+                                            │
+                                            ▼
+                                 embed condensed question
+                                            │
+                                            ▼
+                    vector search (Chroma) ──► over-fetch candidates
+                                            │
+                                            ▼
+                          LLM re-ranks candidates ──► top-k chunks
+                                            │
+                                            ▼
                     LLM answers original question using chunks + history
-                                                │
-                                                ▼
-                    save turn to history ──► { answer, sources, session_id }
+                                            │
+                                            ▼
+          save turn to history ──► { answer, sources, session_id }
 ```
 
 **Design choices worth calling out:**
