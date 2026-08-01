@@ -1,6 +1,12 @@
+import time
 import uuid
 
-from app.services.chat_history import append_message, get_history
+from app.services.chat_history import (
+    _connect,
+    append_message,
+    cleanup_expired_messages,
+    get_history,
+)
 
 
 def test_history_round_trip():
@@ -46,3 +52,44 @@ def test_history_respects_max_turns():
 
 def test_unknown_session_returns_empty_history():
     assert get_history(str(uuid.uuid4()), max_turns=5) == []
+
+
+def _insert_message_with_timestamp(session_id: str, created_at: float) -> None:
+    """Bypasses append_message (which stamps `now()` and would also
+    trigger the throttled cleanup) to insert a message with a specific,
+    possibly-backdated, created_at — needed to test expiry directly."""
+    with _connect() as conn:
+        conn.execute(
+            "INSERT INTO chat_messages (session_id, role, content, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (session_id, "user", "backdated message", created_at),
+        )
+
+
+def test_cleanup_expired_messages_removes_old_rows_only(mocker):
+    mocker.patch("app.services.chat_history.settings.CHAT_HISTORY_TTL_DAYS", 30)
+
+    old_session = str(uuid.uuid4())
+    recent_session = str(uuid.uuid4())
+
+    forty_days_ago = time.time() - (40 * 86400)
+    _insert_message_with_timestamp(old_session, forty_days_ago)
+    _insert_message_with_timestamp(recent_session, time.time())
+
+    deleted = cleanup_expired_messages()
+
+    assert deleted >= 1
+    assert get_history(old_session, max_turns=5) == []
+    assert get_history(recent_session, max_turns=5) != []
+
+
+def test_cleanup_expired_messages_disabled_when_ttl_is_zero(mocker):
+    mocker.patch("app.services.chat_history.settings.CHAT_HISTORY_TTL_DAYS", 0)
+
+    session_id = str(uuid.uuid4())
+    _insert_message_with_timestamp(session_id, time.time() - (999 * 86400))
+
+    deleted = cleanup_expired_messages()
+
+    assert deleted == 0
+    assert get_history(session_id, max_turns=5) != []

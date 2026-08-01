@@ -52,7 +52,7 @@ class Settings:
     RRF_K = int(os.getenv("RRF_K", "60"))
 
     # --- Chat history ---
-    # Number of prior (user, assistant) turns kept per session and fed
+    # Number of prior (user, assistant) turns kept per session and replayed
     # back to the model as conversation context.
     CHAT_HISTORY_MAX_TURNS = int(os.getenv("CHAT_HISTORY_MAX_TURNS", "6"))
 
@@ -60,6 +60,27 @@ class Settings:
     # standalone questions using chat history before embedding, so
     # retrieval isn't thrown off by missing context.
     CONDENSE_QUESTION_ENABLED = os.getenv("CONDENSE_QUESTION_ENABLED", "true").lower() == "true"
+
+    # Messages older than this are purged so history doesn't accumulate
+    # forever. 0 (or less) disables expiry and keeps everything.
+    CHAT_HISTORY_TTL_DAYS = int(os.getenv("CHAT_HISTORY_TTL_DAYS", "30"))
+
+    # Cleanup is opportunistic (runs from append_message, not a cron job),
+    # throttled to at most once per this many seconds so it doesn't add a
+    # DELETE scan to every single chat turn.
+    CHAT_HISTORY_CLEANUP_INTERVAL_SECONDS = int(
+        os.getenv("CHAT_HISTORY_CLEANUP_INTERVAL_SECONDS", str(60 * 60))
+    )
+
+    # --- Local dev convenience ---
+    # The parent directory holding uploads, the Chroma index, and the
+    # SQLite database. When DEV_RESET_DATA_ON_START is true, this entire
+    # directory is wiped every time the app starts, so local testing
+    # always begins from a clean slate instead of accumulating old
+    # uploads across runs. Off by default. NEVER enable this in a real
+    # deployment — Render/Fly/Docker restarts would delete real data.
+    LOCAL_DATA_DIR = os.getenv("LOCAL_DATA_DIR", "data")
+    DEV_RESET_DATA_ON_START = os.getenv("DEV_RESET_DATA_ON_START", "false").lower() == "true"
 
 
 settings = Settings()

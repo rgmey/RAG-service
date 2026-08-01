@@ -7,8 +7,8 @@ returned alongside every answer.
 
 What started as a clean service-oriented API layer over OpenRouter has
 grown into a full RAG pipeline: document ingestion, chunking, embedding,
-re-ranked retrieval, and context-aware chat, all behind a small, typed
-FastAPI surface.
+hybrid + re-ranked retrieval, and context-aware chat, all behind a small,
+typed FastAPI surface — plus a minimal built-in frontend.
 
 ## Current Features
 
@@ -35,6 +35,9 @@ FastAPI surface.
   and follow-up questions ("what about last year?") are rewritten into
   standalone queries before retrieval, so vector search isn't thrown off
   by missing context
+- **Chat history expiry** — messages older than `CHAT_HISTORY_TTL_DAYS`
+  are purged automatically so sessions don't accumulate forever, with no
+  cron job required
 - A minimal built-in frontend (`/`) — upload documents and chat with them
   in the browser, no separate hosting or build step required
 - OpenRouter integration for multi-model access (swap models via one env
@@ -44,7 +47,7 @@ FastAPI surface.
   `schemas/`)
 - Environment-based configuration (`.env` support)
 - CORS configuration and a `/health` endpoint for service monitoring
-- Test suite (pytest, 23 tests) with mocked LLM calls, and ruff for linting
+- Test suite (pytest, 36 tests) with mocked LLM calls, and ruff for linting
 - Dockerfile + docker-compose for one-command deployment
 
 ## Architecture
@@ -55,8 +58,8 @@ Upload (PDF)
     ▼
 POST /upload ──► save to disk ──► create job (SQLite)
                                                 │
-                                                ▼    
-store in Chroma ◄── embed  ◄── extract text ◄── queue background task  
+                                                ▼
+store in Chroma ◄── embed  ◄── extract text ◄── queue background task
     │
     ▼
 (poll for job status) ───────────► GET /status/{job_id}
@@ -89,11 +92,10 @@ store in Chroma ◄── embed  ◄── extract text ◄── queue backgrou
                     LLM answers original question using chunks + history
                                             │
                                             ▼
-              save turn to history ──► { answer, sources, session_id }  
+              save turn to history ──► { answer, sources, session_id }
 ```
 
 **Design choices worth calling out:**
-
 - `rag/index.py` holds a single shared Chroma `collection` object, imported
   by both the ingestion pipeline and retrieval, so the two paths can never
   end up pointed at different collections.
@@ -108,6 +110,11 @@ store in Chroma ◄── embed  ◄── extract text ◄── queue backgrou
   BM25 scores aren't on comparable scales — RRF sidesteps that entirely.
   It also degrades gracefully to vector-only if the keyword index has
   nothing to contribute.
+- Chat history cleanup is opportunistic rather than a scheduled job —
+  `append_message` checks a stored "last cleanup" timestamp and only
+  runs the expiry sweep if enough time has passed (default: once per
+  hour), so it's a cheap no-op on most chat turns and needs no separate
+  worker process or cron.
 - Chunking is token-based via `tiktoken` when available, with a
   character-based fallback if the tokenizer can't be loaded (e.g. offline
   environments).
@@ -117,12 +124,12 @@ store in Chroma ◄── embed  ◄── extract text ◄── queue backgrou
 
 ## API
 
-| Endpoint           | Method | Description                                                                         |
-| ------------------ | ------ | ----------------------------------------------------------------------------------- |
-| `/health`          | GET    | Liveness check                                                                      |
-| `/upload`          | POST   | Upload a document (`multipart/form-data`, field `file`). Returns `{job_id, status}` |
-| `/status/{job_id}` | GET    | Poll ingestion status: `pending` → `processing` → `done`/`failed`                   |
-| `/chat`            | POST   | Ask a question grounded in ingested documents, optionally continuing a session      |
+| Endpoint | Method | Description |
+|---|---|---|
+| `/health` | GET | Liveness check |
+| `/upload` | POST | Upload a document (`multipart/form-data`, field `file`). Returns `{job_id, status}` |
+| `/status/{job_id}` | GET | Poll ingestion status: `pending` → `processing` → `done`/`failed` |
+| `/chat` | POST | Ask a question grounded in ingested documents, optionally continuing a session |
 
 ### Example Request
 
@@ -186,6 +193,19 @@ uvicorn app.main:app --reload
 
 Open `http://localhost:8000` for the built-in UI, or `http://localhost:8000/docs` to use the API directly.
 
+**Want a clean slate on every restart?** Set `DEV_RESET_DATA_ON_START=true`
+in `.env`. Every time you start the server, it wipes `data/` (uploads,
+the Chroma index, jobs, chat history) before initializing — no more old
+test PDFs quietly contributing to retrieval results weeks later. It's
+off by default, and only ever touches `LOCAL_DATA_DIR` (default `data/`)
+on your machine — **never enable this in a real deployment**, or a
+restart on Render/Fly/Docker would delete real uploaded data.
+
+Note this also fires on every `--reload` hot-reload, not just a manual
+restart, since uvicorn's reloader spawns a fresh process on each code
+change. If that's disruptive while actively testing with real uploads,
+drop `--reload` for that session or toggle the flag off temporarily.
+
 ## Running with Docker
 
 ```bash
@@ -232,19 +252,15 @@ a portfolio demo; upgrade to a paid plan and add a `disk:` block back to
    and the included `fly.toml`. Say no to a Postgres/Redis add-on
    (not needed).
 3. Create and attach a volume for persistent data:
-   
    ```bash
    fly volumes create data --size 1 --region <your-region>
    ```
-   
    (`fly.toml` already declares the mount at `/code/data`.)
 4. Set your API key as a secret (never put it in `fly.toml`):
-   
    ```bash
    fly secrets set OPENROUTER_API_KEY=sk-or-v1-...
    ```
 5. Deploy:
-   
    ```bash
    fly deploy
    ```
@@ -263,22 +279,6 @@ without upgrading.
 - There's no auth on `/upload` or `/chat` — anyone with the URL can use
   (and pay for, via your API key) the service. Fine for a private demo
   link, not for anything public-facing without adding an API key check.
-
-## Testing
-
-```bash
-pip install -r requirements-dev.txt
-pytest
-```
-
-Tests mock all external LLM/embedding calls, so no API key or network access
-is required to run the suite.
-
-## Linting
-
-```bash
-ruff check app tests
-```
 
 ## Evaluation
 
@@ -301,11 +301,27 @@ LLM re-ranking calls) against your API key, and prints a results table.
 This is a dev tool you run manually — it's not part of the pytest suite,
 which stays fully mocked and offline.
 
+## Testing
+
+```bash
+pip install -r requirements-dev.txt
+pytest
+```
+
+Tests mock all external LLM/embedding calls, so no API key or network access
+is required to run the suite.
+
+## Linting
+
+```bash
+ruff check app tests eval
+```
+
 ## Configuration
 
 See `.env.example` for all available environment variables — model
-selection, chunk size/overlap, upload limits, CORS origins, re-ranking, and
-chat history settings.
+selection, chunk size/overlap, upload limits, CORS origins, re-ranking,
+hybrid search, and chat history settings.
 
 ## Known Limitations / Next Steps
 
@@ -324,7 +340,7 @@ chat history settings.
   back), not end-to-end answer correctness — there's no automated check
   that the generated answer is actually right, only that it was grounded
   in the right source.
-- Uploaded source files are never cleaned up after processing.
+- Uploaded source files are never cleaned up after processing (unlike
+  chat history, which now expires automatically).
 - No document-type-specific parsing yet (e.g. table extraction) — plain
   text extraction only.
-- Chat history has no expiry/cleanup — sessions accumulate indefinitely.

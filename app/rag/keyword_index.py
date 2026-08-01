@@ -28,6 +28,8 @@ _SCHEMA = "CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(id UNINDEXED
 # and hybrid search both degrade gracefully to vector-only in that case.
 FTS5_AVAILABLE = True
 
+_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")  # keeps codes like "E-4021" intact
+
 
 @contextmanager
 def _connect():
@@ -65,9 +67,6 @@ def index_chunks(vectors: list[dict]) -> None:
             "INSERT INTO chunks_fts (id, text) VALUES (?, ?)",
             [(v["id"], v["text"]) for v in vectors],
         )
-
-
-_TOKEN_RE = re.compile(r"[A-Za-z0-9]+(?:-[A-Za-z0-9]+)*")  # keeps codes like "E-4021" intact
 
 
 def _build_match_query(query: str) -> str | None:
