@@ -50,7 +50,8 @@ POST /upload ──► save to disk ──► create job (SQLite) ──► queu
                                                                    ▼
                                               extract text → chunk → embed → store in Chroma
                                                                    │
-GET /status/{job_id} ◄────────────────────────────────────────────┘  (poll for job status)
+                                                                   ▼
+GET /status/{job_id} ◄─────────────────────────────────────────────  (poll for job status)
 
 Question (+ optional session_id)
    │
@@ -74,6 +75,7 @@ load chat history for session ──► condense question using history (if foll
 ```
 
 **Design choices worth calling out:**
+
 - `rag/index.py` holds a single shared Chroma `collection` object, imported
   by both the ingestion pipeline and retrieval, so the two paths can never
   end up pointed at different collections.
@@ -92,12 +94,12 @@ load chat history for session ──► condense question using history (if foll
 
 ## API
 
-| Endpoint | Method | Description |
-|---|---|---|
-| `/health` | GET | Liveness check |
-| `/upload` | POST | Upload a document (`multipart/form-data`, field `file`). Returns `{job_id, status}` |
-| `/status/{job_id}` | GET | Poll ingestion status: `pending` → `processing` → `done`/`failed` |
-| `/chat` | POST | Ask a question grounded in ingested documents, optionally continuing a session |
+| Endpoint           | Method | Description                                                                         |
+| ------------------ | ------ | ----------------------------------------------------------------------------------- |
+| `/health`          | GET    | Liveness check                                                                      |
+| `/upload`          | POST   | Upload a document (`multipart/form-data`, field `file`). Returns `{job_id, status}` |
+| `/status/{job_id}` | GET    | Poll ingestion status: `pending` → `processing` → `done`/`failed`                   |
+| `/chat`            | POST   | Ask a question grounded in ingested documents, optionally continuing a session      |
 
 ### Example Request
 
@@ -207,15 +209,19 @@ a portfolio demo; upgrade to a paid plan and add a `disk:` block back to
    and the included `fly.toml`. Say no to a Postgres/Redis add-on
    (not needed).
 3. Create and attach a volume for persistent data:
+   
    ```bash
    fly volumes create data --size 1 --region <your-region>
    ```
+   
    (`fly.toml` already declares the mount at `/code/data`.)
 4. Set your API key as a secret (never put it in `fly.toml`):
+   
    ```bash
    fly secrets set OPENROUTER_API_KEY=sk-or-v1-...
    ```
 5. Deploy:
+   
    ```bash
    fly deploy
    ```
