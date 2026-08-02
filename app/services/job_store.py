@@ -69,21 +69,26 @@ def create_job(job_id: str, file_path: str) -> None:
         )
 
 
-def update_job(job_id: str, **kwargs) -> None:
+def update_job(job_id: str, **kwargs) -> bool:
+    """Returns True if a row was actually updated, False if job_id no
+    longer exists (SQLite UPDATE on zero matching rows doesn't raise —
+    it's a silent no-op — so callers that need to know their job record
+    is still there must check this return value explicitly)."""
     if not kwargs:
-        return
+        return False
 
     allowed = {"status", "chunk_count", "error"}
     fields = {k: v for k, v in kwargs.items() if k in allowed}
     if not fields:
-        return
+        return False
 
     fields["updated_at"] = time.time()
     set_clause = ", ".join(f"{k} = ?" for k in fields)
     values = list(fields.values()) + [job_id]
 
     with _connect() as conn:
-        conn.execute(f"UPDATE jobs SET {set_clause} WHERE job_id = ?", values)
+        cursor = conn.execute(f"UPDATE jobs SET {set_clause} WHERE job_id = ?", values)
+        return cursor.rowcount > 0
 
 
 def get_job(job_id: str) -> dict | None:

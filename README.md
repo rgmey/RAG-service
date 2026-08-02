@@ -47,7 +47,7 @@ typed FastAPI surface — plus a minimal built-in frontend.
   `schemas/`)
 - Environment-based configuration (`.env` support)
 - CORS configuration and a `/health` endpoint for service monitoring
-- Test suite (pytest, 36 tests) with mocked LLM calls, and ruff for linting
+- Test suite (pytest, 44 tests) with mocked LLM calls, and ruff for linting
 - Dockerfile + docker-compose for one-command deployment
 
 ## Architecture
@@ -201,9 +201,14 @@ off by default, and only ever touches `LOCAL_DATA_DIR` (default `data/`)
 on your machine — **never enable this in a real deployment**, or a
 restart on Render/Fly/Docker would delete real uploaded data.
 
-Note this also fires on every `--reload` hot-reload, not just a manual
+This also fires on every `--reload` hot-reload, not just a manual
 restart, since uvicorn's reloader spawns a fresh process on each code
-change. If that's disruptive while actively testing with real uploads,
+change. The wipe automatically skips itself (with a log line explaining
+why) if any upload is still `pending`/`processing` when it would run —
+otherwise a reload mid-upload would delete the very job record the
+still-running background task is about to write its result to, which
+used to surface as a confusing "job not found" with no explanation. If
+that's still disruptive while actively testing uploads,
 drop `--reload` for that session or toggle the flag off temporarily.
 
 ## Running with Docker
@@ -325,6 +330,17 @@ hybrid search, and chat history settings.
 
 ## Known Limitations / Next Steps
 
+- On Render's free tier specifically, a long-running upload can still
+  fail with "job not found" if the service spins down (idle) or
+  redeploys while a background task is mid-processing — the job record
+  and the task both live on the same ephemeral disk, and one disappearing
+  takes the other's destination with it. The pipeline now logs this
+  clearly server-side (`app.rag.pipeline`, "vanished mid-processing")
+  instead of failing silently, but it doesn't prevent the loss — that
+  would need moving job execution off the ephemeral local disk entirely
+  (e.g. a Celery/RQ worker backed by Redis, or a paid plan with a
+  persistent disk). See the local dev-reset guard above for the same
+  failure mode's local-only fix.
 - Job store, chat history, and vector store (Chroma, local persistence)
   are all single-instance — fine for one deployment, but you'd want
   Postgres/Redis and a managed vector DB before running multiple app

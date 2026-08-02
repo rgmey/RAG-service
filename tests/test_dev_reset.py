@@ -1,4 +1,5 @@
 import os
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -55,3 +56,36 @@ def test_dev_reset_disabled_by_default_leaves_data_untouched():
 
         assert existing_file.exists()
         assert existing_file.read_text() == "data from a previous run"
+
+
+def test_dev_reset_skips_wipe_when_a_job_is_still_processing():
+    """Regression test for the exact bug reported: a --reload restart
+    mid-upload used to wipe the job record a background task (from the
+    now-dead old process) was still about to write its result to,
+    producing an unexplained 'job not found'. The reset must skip
+    itself, not the job, when this happens."""
+    with tempfile.TemporaryDirectory() as tmp:
+        data_dir = Path(tmp) / "data"
+        data_dir.mkdir()
+
+        jobs_db_path = data_dir / "jobs.db"
+        conn = sqlite3.connect(jobs_db_path)
+        conn.execute(
+            "CREATE TABLE jobs (job_id TEXT PRIMARY KEY, file_path TEXT, status TEXT, "
+            "chunk_count INTEGER, error TEXT, created_at REAL, updated_at REAL)"
+        )
+        conn.execute(
+            "INSERT INTO jobs VALUES (?, ?, ?, ?, ?, ?, ?)",
+            ("in-flight-job", "/tmp/fake.pdf", "processing", None, None, 0.0, 0.0),
+        )
+        conn.commit()
+        conn.close()
+
+        stale_marker = data_dir / "should_survive.txt"
+        stale_marker.write_text("this job is still processing, don't delete me")
+
+        _import_app_main_in_subprocess(data_dir, reset_on_start=True)
+
+        # The wipe should have been skipped entirely because of the active job.
+        assert stale_marker.exists()
+        assert stale_marker.read_text() == "this job is still processing, don't delete me"
